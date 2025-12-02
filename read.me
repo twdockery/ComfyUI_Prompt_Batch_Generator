@@ -1,0 +1,190 @@
+I am vibe coding this so don't hate me. 
+Tyler Dockery, DynamoDesign@gmail.com
+---
+
+This was my original plan:
+
+# --- I worked with gemini to build this workflow. please read and understand it:
+
+Open ComfyUI and build the graph from scratch to ensure you have maximum control.
+You will build the following node chain:
+
+Load Text Node
+Select Load Text File → point it to C:\AI\BatchImages\prompts\prompts.txt.
+This node outputs the entire text file as a single large text block.
+
+Split Text Node
+Insert a Split Text node after Load Text File.
+Set the split delimiter to \n (newline).
+This produces a list of individual prompts.
+
+Counter / Index Node
+Add a primitive integer counter node such as “Iterate Value” or “List Index Loop” (depending on your installed custom nodes).
+The node must perform the following:
+• On graph execution, read index 0
+• After image generation completes, increment index +1
+• Stop automatically when index exceeds number of prompts
+
+If you do not have a looping node installed, install the “ComfyUI-Manager” extension, then install “ComfyUI Loop Nodes” which includes List Index Loop, List Loop Control, and similar utilities needed for prompt iteration.
+
+List Index Node
+Use a List Index node to combine the prompt list with the index.
+Input A = result of Split Text
+Input B = the counter
+Output = single current prompt string
+This becomes the text fed into the conditioning nodes.
+
+Load Checkpoint Node
+Load your SD1.5 base model file from C:\AI\BatchImages\checkpoints\filename.safetensors
+Set the following for stable low-VRAM operation:
+• Enable FP16 precision
+• Disable VAE tiling unless encountering VRAM errors
+• Use the standard SD 1.5 VAE for fastest sampling
+• Do not use CLIP skip unless needed
+
+Clip Text Encode (Positive)
+Connect the List Index output (the current prompt) into the positive conditioning encoder.
+Set conditioning strength to 1.0.
+
+Clip Text Encode (Negative)
+Input a fixed negative prompt that will apply to every generated image. For example:
+blurry, distorted, poorly drawn hands, low resolution, watermark, text artifacts
+You can save this negative prompt as a small file and load it via Load Text File if you want to centralize configuration.
+
+Sampler Node
+Use the KSampler or the more efficient KSampler Advanced.
+Configure for fastest throughput on 6 GB VRAM:
+Sampler = Euler A or DPM++ 2M Karras
+Steps = 15–20 for speed, 25–30 for quality
+CFG = 5–7
+Seed = set to “random” or use an Increment Seed node
+Batch size = 1 (very important on 6 GB VRAM)
+Width = 512
+Height = 512 or 768 max
+If you attempt 1024×1024 you will crash or hit large swap penalties.
+
+Latent → VAE Decode Node
+Decode output to an image.
+
+Save Image Node
+Set the output folder to C:\AI\BatchImages\outputs\
+Configure the filename to automatically incorporate the prompt index:
+img_##
+To do this, use a Text Combine node, e.g.:
+"image_" + index
+Then feed into the Save Image filename override field.
+
+Loop Control Node
+Add the Loop Continue / Loop End node from the Loop Nodes extension.
+Connect the “after save” output from Save Image to the Continue input.
+Connect the counter increment to the Loop Control.
+Configure the Loop Control node to stop when index = total_prompts.
+
+This node is what makes the workflow automatically move to the next prompt without clicking anything.
+–––––
+Create a batch-run script tailored for your hardware and avoid UI dependence by using ComfyUI’s command-line batch execution mode. This allows you to start the entire sequence from a .json workflow file and have ComfyUI run until all prompts are completed.
+
+Steps:
+
+A. Open ComfyUI’s menu
+Export your completed node graph as batch_workflow.json and place it in:
+C:\AI\BatchImages\batch_workflow.json
+
+B. Create a Windows batch file:
+C:\AI\BatchImages\run.bat
+
+Place the following lines inside:
+cd C:\path\to\ComfyUI
+python main.py --prompt C:\AI\BatchImages\batch_workflow.json
+
+When executed, this launches ComfyUI, loads your workflow, processes prompt 0 → N, saves all images, then stops.
+
+C. Optional: create a second batch file to restart if you crash.
+If your GPU overheats or crashes, you can resume at the last index by writing the index into a tiny text checkpoint (using a Node to write the last completed index), but this is optional.
+
+–––––
+
+Memory-specific technical adjustments for your 6 GB VRAM:
+Never use batch > 1.
+Batch 2 or higher will OOM and freeze.
+
+Use xformers and torch-compile options enabled in ComfyUI.
+These reduce VRAM spikes.
+
+Avoid SDXL entirely.
+SDXL needs 10–14 GB VRAM and will stall on your configuration.
+
+Use 512px images.
+768px is possible but slower.
+1024px will cause delay or crash.
+
+Keep VAE on CPU if needed.
+If decoding fails on GPU, switch the VAE decode node to “CPU” in the advanced panel.
+This lengthens decoding slightly but prevents failures.
+
+Avoid ControlNet unless required.
+ControlNet adds heavy VRAM cost. If used, only load one ControlNet at a time.
+
+–––––
+
+Integrate prompt-level metadata saving:
+If you want each generated image saved with its own prompt text beside it, create the following additions:
+• Add a Save Text Node
+Output folder = C:\AI\BatchImages\outputs\metadata
+Filename = “prompt_” + index + “.txt”
+Input = The current prompt from the List Index node
+
+• Optionally save sampler settings, steps, seed, CFG by passing them through a Text Compose node.
+
+–––––
+
+Optional improvement: offload LLM prompt rewriting to your Ollama models.
+
+You listed DeepSeek-R1 7B, Llama 3, and Mistral in Docker/Ollama. You can use these to auto-expand or refine prompts before passing them to ComfyUI.
+
+If desired, create a pre-generation script like:
+refine_prompts.py
+
+This script:
+• Reads prompts.txt
+• Sends each line to your local Ollama model using:
+ollama run llama3 "<prompt>"
+• Receives a rewritten or expanded prompt
+• Saves a new file: refined_prompts.txt
+• Use refined_prompts.txt as your source in ComfyUI
+
+This step is optional but dramatically improves prompt quality when batching large sets.
+–––––
+
+End-to-end operational sequence for your full workflow:
+
+Place all your raw prompts in:
+C:\AI\BatchImages\prompts\prompts.txt
+
+Open ComfyUI
+Load or import batch_workflow.json
+
+Confirm your model path
+Check that SD 1.5 is properly loaded in the checkpoint node.
+
+Press Execute
+
+ComfyUI will:
+• Load the prompt list
+• Start with index = 0
+• Generate image 0
+• Save it
+• Increment index
+• Generate image 1
+• Continue until all prompts are produced
+
+All output images accumulate in:
+C:\AI\BatchImages\outputs\
+
+If using the batch script, run run.bat
+
+It boots ComfyUI without UI and executes automatically.
+
+–––––
+By assembling the nodes exactly as described—Load Text → Split → Index → Conditioning → Sampler → Decode → Save → Loop—you create a fully automated image-generation engine that processes unlimited prompts, saves each image reliably, and operates continuously within your 6 GB VRAM limit.
+---#
